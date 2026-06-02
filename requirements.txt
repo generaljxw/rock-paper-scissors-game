@@ -1,0 +1,29 @@
+# 猜拳小游戏 - Python依赖清单
+# 适用于 Python 3.11
+
+# GUI框架 - PyQt6
+PyQt6==6.7.0
+
+# 数据库
+# SQLite3 为Python标准库，无需额外安装
+
+# 数据处理（胜率统计）
+# pandas==2.2.0
+
+# 打包工具
+pyinstaller==6.5.0
+
+# 开发依赖
+pytest==8.1.1
+pytest-qt==4.4.0
+
+# 代码质量
+black==24.3.0
+flake8==7.0.0
+pylint==3.1.0
+
+# 日志
+loguru==0.7.2
+
+# 类型检查
+mypy==1.10.0

@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+env/
+.venv/
+
+# PyInstaller
+*.manifest
+dist/
+build/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+test_output/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.trae/
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Project specific
+*.db
+*.sqlite
+*.sqlite3
+logs/
+*.log
+
+# Environment & Secrets
+.env
+.env.local
+.env.production
+
+# Build artifacts
+*.spec
+
+# GitHub workflows (local only)
+.github/
