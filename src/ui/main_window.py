@@ -16,6 +16,7 @@ from PyQt6.QtGui import QFont
 from ..business.game_engine import GameEngine
 from ..business.score_manager import ScoreManager
 from ..business.statistics import Statistics
+from ..audio.audio_manager import get_audio_manager
 from .battle_window import BattleWindow
 
 
@@ -35,12 +36,15 @@ class MainWindow(QWidget):
         self.game_engine = GameEngine()
         self.score_manager = ScoreManager()
         self.statistics = Statistics()
+        self.audio_manager = get_audio_manager()
         self.battle_window = None
         self._init_failed = False
         
         try:
             self._init_ui()
             self._update_user_info()
+            # 进入主界面时确保播放mode_select BGM
+            self.audio_manager.play_bgm("mode_select")
         except Exception as e:
             print(f"主窗口初始化失败: {e}")
             self._init_failed = True
@@ -378,6 +382,8 @@ class MainWindow(QWidget):
             self._update_user_info()
 
         self.game_engine.start_game(self.user_id, mode_id)
+        # 开始对战时切换到对应模式的BGM
+        self.audio_manager.switch_bgm("battle", mode=mode_id)
         self.battle_window = BattleWindow(self.game_engine, self.score_manager, self.user_id, mode_id)
         self.battle_window.game_finished.connect(self._on_game_finished)
         self.battle_window.closed.connect(self._on_battle_closed)
@@ -391,6 +397,8 @@ class MainWindow(QWidget):
             score_change: 积分变化
         """
         self._update_user_info()
+        # 返回主界面时切换回mode_select BGM
+        self.audio_manager.switch_bgm("mode_select")
         self.show()
 
     def _on_battle_closed(self):
@@ -398,6 +406,8 @@ class MainWindow(QWidget):
         处理对战窗口关闭事件
         """
         self._update_user_info()
+        # 返回主界面时切换回mode_select BGM
+        self.audio_manager.switch_bgm("mode_select")
         self.show()
 
     def _on_history_clicked(self):
@@ -422,4 +432,6 @@ class MainWindow(QWidget):
             QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
+            # 退出登录时切换回login BGM
+            self.audio_manager.switch_bgm("login")
             self.logout_requested.emit()

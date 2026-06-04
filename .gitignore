@@ -49,5 +49,14 @@ logs/
 # Build artifacts
 *.spec
 
+# Temporary files
+.temp_lib/
+download_audio.py
+generate_bgm.py
+generate_sfx.py
+tests/result.txt
+tests/test_result.txt
+build_log.txt
+
 # GitHub workflows (local only)
 .github/

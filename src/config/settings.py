@@ -17,7 +17,7 @@ class Settings:
     """
 
     PROJECT_NAME = "猜拳小游戏"
-    PROJECT_VERSION = "1.0.0"
+    PROJECT_VERSION = "1.1.0"
 
     BASE_DIR = Path(__file__).parent.parent.parent
     DATA_DIR = BASE_DIR / "data"
@@ -45,6 +45,12 @@ class Settings:
     DEFAULT_PASSWORD_MIN_LENGTH = 6
 
     MAX_HISTORY_RECORDS = 100
+
+    # 音频配置
+    SOUNDS_DIR = ASSETS_DIR / "sounds"
+    BGM_VOLUME = 0.7           # 默认BGM音量
+    SFX_VOLUME = 1.0           # 默认SFX音量
+    DUCK_VOLUME = 0.2          # Ducking时BGM音量
 
     @classmethod
     def ensure_directories(cls):

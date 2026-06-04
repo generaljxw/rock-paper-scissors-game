@@ -13,6 +13,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QPixmap, QIcon
 
 from ..business.user_manager import UserManager
+from ..audio.audio_manager import get_audio_manager
 from .main_window import MainWindow
 
 
@@ -27,8 +28,11 @@ class LoginWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.user_manager = UserManager()
+        self.audio_manager = get_audio_manager()
         self.main_window = None
         self._init_ui()
+        # 登录界面显示时播放BGM
+        self.audio_manager.play_bgm("login")
 
     def _init_ui(self):
         """
@@ -222,6 +226,8 @@ class LoginWindow(QWidget):
         if success:
             user = self.user_manager.get_current_user()
             self._show_success(f"登录成功！欢迎 {user.username}！🎉")
+            # 登录成功后切换到模式选择界面BGM
+            self.audio_manager.switch_bgm("mode_select")
             self.login_success.emit(user.id, user.username)
         else:
             self._show_error(message)

@@ -1,9 +1,9 @@
 # 📐 架构设计文档 (AD - Architecture Design)
 
 **项目**: 儿童猜拳小游戏
-**版本**: v1.0.0
-**日期**: 2026-06-01
-**状态**: 基线版本
+**版本**: v1.2.0
+**日期**: 2026-06-02
+**状态**: 审核发布
 **作者**: Planner架构师
 **审批人**: 待确认
 
@@ -14,7 +14,8 @@
 | 版本号 | 修订日期 | 修订人 | 修订内容摘要 | 审批状态 |
 |--------|----------|--------|--------------|----------|
 | v1.0.0 | 2026-06-01 | Planner架构师 | 初始版本，创建架构设计文档 | 已审批 |
-| v1.1.0 | 2026-06-02 | Coder开发工程师 | 1.battle_records表移除player_choice/ai_choice字段，改为每轮对战汇总记录；2.BattleWindow增加"再玩一局"积分检查 | 待审批 |
+| v1.1.0 | 2026-06-02 | Coder开发工程师 | 1.battle_records表移除player_choice/ai_choice字段，改为每轮对战汇总记录；2.BattleWindow增加"再玩一局"积分检查 | 已审批 |
+| v1.2.0 | 2026-06-02 | Planner架构师 | 新增音频管理模块（AudioManager），支持背景音乐和音效播放，含ducking机制和界面音乐切换 | 已审批 |
 
 ---
 
@@ -33,6 +34,7 @@
 | **打包工具** | PyInstaller | 6.5.0+ | 生成免安装exe |
 | **测试框架** | pytest | 8.1.1+ | 单元测试框架 |
 | **日志框架** | loguru | 0.7.2+ | 日志记录 |
+| **音频引擎** | QMediaPlayer (PyQt6) | 6.7.0+ | 背景音乐与音效播放 |
 
 ### 1.3 技术选型理由
 
@@ -77,6 +79,14 @@
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
+│                    音频管理层 (Audio Layer)                    │
+│  ┌──────────────────────────────────────────────────┐       │
+│  │ AudioManager（背景音乐管理 + 音效管理 + Ducking） │       │
+│  └──────────────────────────────────────────────────┘       │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
 │                      数据层 (Data Layer)                      │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐                    │
 │  │ 用户数据  │ │ 对战记录  │ │ 积分数据  │                    │
@@ -106,7 +116,15 @@
 | BattleModeManager | 对战模式管理 | select_mode(), calculate_battle_result() |
 | StatisticsManager | 统计分析 | record_battle(), get_win_rate(), get_statistics() |
 
-#### 2.2.3 数据层组件
+#### 2.2.3 音频管理层组件
+
+| 组件名称 | 职责 | 公共接口 |
+|----------|------|----------|
+| AudioManager | 音频管理（背景音乐+音效） | play_bgm(), stop_bgm(), switch_bgm(), play_sfx(), duck_bgm(), restore_bgm() |
+
+> **v1.2.0 新增说明**：AudioManager 负责管理游戏所有背景音乐和音效的播放控制，包括界面间音乐无缝切换、出拳时背景音乐Ducking（音量压低）机制、音效即时播放等功能。底层基于 PyQt6 的 QMediaPlayer（背景音乐）和 QSoundEffect（音效）实现。
+
+#### 2.2.4 数据层组件
 
 | 组件名称 | 职责 | 数据表 |
 |----------|------|--------|
@@ -167,6 +185,48 @@ class IScoreManager:
 
     def add_bonus(self, user_id: int, bonus: int) -> bool:
         """添加奖励"""
+```
+
+### 3.4 音频管理接口
+
+> **v1.2.0 新增**
+
+```python
+class IAudioManager:
+    def play_bgm(self, scene: str, mode: int = None, result: str = None) -> None:
+        """播放背景音乐
+        参数:
+            scene: 场景标识（login/mode_select/battle/settlement）
+            mode: 对战模式（1/2/3），仅battle场景使用
+            result: 结算结果（win/lose），仅settlement场景使用
+        """
+
+    def stop_bgm(self) -> None:
+        """停止当前背景音乐"""
+
+    def switch_bgm(self, scene: str, mode: int = None, result: str = None) -> None:
+        """无缝切换背景音乐
+        停止当前音乐并播放目标场景音乐
+        """
+
+    def play_sfx(self, sfx_type: str) -> None:
+        """播放音效
+        参数:
+            sfx_type: 音效类型（rock/scissors/paper/win/lose/draw）
+        """
+
+    def duck_bgm(self) -> None:
+        """压低背景音乐音量（Ducking）
+        出拳时调用，确保音效清晰可闻
+        """
+
+    def restore_bgm(self) -> None:
+        """恢复背景音乐音量
+        音效播放完毕后调用
+        """
+
+    def stop_all(self) -> None:
+        """停止所有音乐和音效（应用退出时调用）"""
 ```
 
 ---
@@ -291,6 +351,9 @@ RockPaperScissors/
 │   │   ├── game_engine.py      # 游戏引擎
 │   │   ├── score_manager.py    # 积分管理
 │   │   └── statistics.py       # 统计分析
+│   ├── audio/                  # 音频管理层 (v1.2.0新增)
+│   │   ├── __init__.py
+│   │   └── audio_manager.py    # 音频管理器
 │   ├── data/                   # 数据层
 │   │   ├── __init__.py
 │   │   ├── database.py         # 数据库管理
@@ -300,6 +363,27 @@ RockPaperScissors/
 │   └── config/                 # 配置目录
 │       ├── __init__.py
 │       └── settings.py         # 配置项
+├── assets/                      # 资源目录
+│   ├── images/                 # 图片资源
+│   ├── sounds/                 # 音频资源 (v1.2.0扩展)
+│   │   ├── bgm/                # 背景音乐
+│   │   │   ├── login.mp3       # 登录界面背景音乐
+│   │   │   ├── mode_select.mp3 # 模式选择界面背景音乐
+│   │   │   ├── battle_mode1.mp3 # 一局定胜负背景音乐
+│   │   │   ├── battle_mode2.mp3 # 三局两胜背景音乐
+│   │   │   ├── battle_mode3.mp3 # 连战模式背景音乐
+│   │   │   ├── settlement_normal_win.mp3  # 普通模式胜利结算
+│   │   │   ├── settlement_normal_lose.mp3 # 普通模式失败结算
+│   │   │   ├── survival_win.mp3           # 连战模式胜利结算
+│   │   │   └── survival_lose.mp3          # 连战模式失败结算
+│   │   └── sfx/                # 音效
+│   │       ├── rock.mp3        # 石头出拳音效
+│   │       ├── scissors.mp3    # 剪刀出拳音效
+│   │       ├── paper.mp3       # 布出拳音效
+│   │       ├── win.mp3         # 胜利判定音效
+│   │       ├── lose.mp3        # 失败判定音效
+│   │       └── draw.mp3        # 平局判定音效
+│   └── fonts/                  # 字体资源
 ├── tests/                       # 测试目录
 │   ├── __init__.py
 │   ├── test_game_engine.py
@@ -309,10 +393,6 @@ RockPaperScissors/
 │   ├── ad/                     # 架构设计文档
 │   ├── dd/                     # 详细设计文档
 │   └── manuals/                # 用户手册
-├── assets/                      # 资源目录
-│   ├── images/                 # 图片资源
-│   ├── sounds/                 # 音效资源
-│   └── fonts/                  # 字体资源
 ├── requirements.txt             # 依赖清单
 ├── setup.bat                   # Windows初始化脚本
 ├── setup.sh                    # Linux/macOS初始化脚本
@@ -333,7 +413,8 @@ RockPaperScissors/
 
 ---
 
-**文档状态**: ✅ 已审批为基线版本
+**文档状态**: ✅ 审核发布
+**当前版本号**: v1.2.0
 **基线版本号**: v1.0.0
 **基线创建日期**: 2026-06-01
 **基线保存位置**: docs/ad/ARCHITECTURE_DESIGN_v1.0.0.md

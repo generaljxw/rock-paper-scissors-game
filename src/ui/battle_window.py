@@ -15,16 +15,32 @@ from PyQt6.QtGui import QFont
 from ..business.game_engine import GameEngine
 from ..business.score_manager import ScoreManager
 from ..business.enums import Choice, Result
+from ..audio.audio_manager import get_audio_manager
 
 
 class BattleWindow(QWidget):
     """
     对战窗口类
     处理游戏对战过程，显示双方选择和结果
+    集成音频管理：出拳Ducking机制、SFX播放、结算BGM切换
     """
 
     game_finished = pyqtSignal(int)
     closed = pyqtSignal()
+
+    # 出拳选择到SFX键名的映射
+    CHOICE_SFX_MAP = {
+        Choice.ROCK: "rock",
+        Choice.SCISSORS: "scissors",
+        Choice.PAPER: "paper",
+    }
+
+    # 对战结果到SFX键名的映射
+    RESULT_SFX_MAP = {
+        Result.WIN: "win",
+        Result.LOSE: "lose",
+        Result.DRAW: "draw",
+    }
 
     CHOICE_BUTTONS = {
         Choice.ROCK: ("✊", "石头"),
@@ -39,6 +55,7 @@ class BattleWindow(QWidget):
         self.score_manager = score_manager
         self.user_id = user_id
         self.mode = mode
+        self.audio_manager = get_audio_manager()
         self.round_count = 0
         self.consecutive_wins = 0
         self.score_change = 0
@@ -198,6 +215,7 @@ class BattleWindow(QWidget):
     def _on_choice_selected(self, choice: Choice):
         """
         处理玩家选择事件
+        集成Ducking机制：出拳时压低BGM音量，播放出拳音效和判定音效后恢复
         参数:
             choice: 玩家选择的拳
         """
@@ -209,12 +227,22 @@ class BattleWindow(QWidget):
 
         self.player_choice_label.setText(self.CHOICE_BUTTONS[choice][0])
 
+        # Ducking机制：压低BGM音量
+        self.audio_manager.duck_bgm()
+        # 播放出拳音效
+        self.audio_manager.play_sfx(self.CHOICE_SFX_MAP[choice])
+
         round_result = self.game_engine.play_round(choice)
         ai_choice = round_result.get("ai_choice")
         self.ai_choice_label.setText(self.CHOICE_BUTTONS[ai_choice][0])
 
         result = round_result.get("result")
         self._update_result_display(result)
+
+        # 播放判定音效
+        self.audio_manager.play_sfx(self.RESULT_SFX_MAP[result])
+        # 延迟恢复BGM音量，等待SFX播放完毕
+        QTimer.singleShot(1500, self.audio_manager.restore_bgm)
 
         if self.mode == 3:
             if result == Result.LOSE:
@@ -325,6 +353,10 @@ class BattleWindow(QWidget):
 
         self.game_engine.save_battle_record(self.score_change)
 
+        # 切换到结算BGM
+        result_str = "win" if final_result == Result.WIN else "lose"
+        self.audio_manager.switch_bgm("settlement", mode=self.mode, result=result_str)
+
         score_text = f"积分变化: {'+' if self.score_change > 0 else ''}{self.score_change}"
         full_text = f"{result_text}  {score_text}"
 
@@ -432,6 +464,8 @@ class BattleWindow(QWidget):
             self._finish_button_layout = None
 
         self.game_engine.start_game(self.user_id, self.mode)
+        # 再来一局时重新播放对战BGM
+        self.audio_manager.switch_bgm("battle", mode=self.mode)
         self.round_count = 0
         self.consecutive_wins = 0
         self.score_change = 0

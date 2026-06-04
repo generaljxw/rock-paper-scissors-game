@@ -1,9 +1,9 @@
 # 📝 详细设计文档 (DD - Detailed Design)
 
 **项目**: 儿童猜拳小游戏
-**版本**: v1.0.0
-**日期**: 2026-06-01
-**状态**: 基线版本
+**版本**: v1.2.0
+**日期**: 2026-06-03
+**状态**: 待审核
 **作者**: Planner架构师
 **审批人**: 待确认
 
@@ -14,7 +14,8 @@
 | 版本号 | 修订日期 | 修订人 | 修订内容摘要 | 审批状态 |
 |--------|----------|--------|--------------|----------|
 | v1.0.0 | 2026-06-01 | Planner架构师 | 初始版本，创建详细设计文档 | 已审批 |
-| v1.1.0 | 2026-06-01 | Planner架构师 | 更新积分系统规则（模式3连续胜利加分）和对战模式2规则（3局2胜必须分出胜负） | 待审批 |
+| v1.1.0 | 2026-06-01 | Planner架构师 | 更新积分系统规则（模式3连续胜利加分）和对战模式2规则（3局2胜必须分出胜负） | 已审批 |
+| v1.2.0 | 2026-06-03 | Coder开发工程师 | 新增音频管理模块（AudioManager）详细设计，包含模块划分、类结构、接口定义、数据结构、业务流程及技术实现方案 | 待审批 |
 
 ---
 
@@ -45,6 +46,14 @@
                     ▲                           │
                     │                           ▼
 ┌─────────────────────────────────────────────────────────────────┐
+│                     音频管理层 (audio)                            │
+│  ┌──────────────────────────────────────────────────────┐       │
+│  │ AudioManager（BGM管理 + SFX管理 + Ducking机制）      │       │
+│  └──────────────────────────────────────────────────────┘       │
+└─────────────────────────────────────────────────────────────────┘
+                    ▲                           │
+                    │                           ▼
+┌─────────────────────────────────────────────────────────────────┐
 │                        数据层 (data)                              │
 │  ┌────────────┐ ┌────────────┐ ┌────────────┐                     │
 │  │ Database   │ │  UserDAO   │ │BattleDAO  │                     │
@@ -58,6 +67,7 @@
 |------|------|----------|
 | ui | 图形用户界面展示和用户交互 | 接收用户输入，显示游戏界面 |
 | business | 游戏业务逻辑处理 | 被ui调用，处理游戏规则 |
+| audio | 音频管理（背景音乐+音效+Ducking） | 被ui调用，控制音乐和音效播放 |
 | data | 数据持久化操作 | 被business调用，读写数据库 |
 
 ---
@@ -418,7 +428,228 @@ class ScoreManager:
         return score.total_score if score else 0
 ```
 
-### 2.4 数据访问类
+### 2.4 音频管理类
+
+#### AudioManager类
+
+```python
+# src/audio/audio_manager.py
+
+from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PyQt6.QtMultimediaWidgets import QSoundEffect
+from PyQt6.QtCore import QUrl, QObject
+from pathlib import Path
+from typing import Optional
+
+
+class AudioManager(QObject):
+    """
+    音频管理器类（单例模式）
+    负责管理游戏所有背景音乐和音效的播放控制
+    底层基于QMediaPlayer（BGM）和QSoundEffect（SFX）实现
+    """
+
+    _instance: Optional['AudioManager'] = None
+
+    # BGM场景映射表
+    BGM_MAP = {
+        "login": "bgm/login.wav",
+        "mode_select": "bgm/mode_select.wav",
+        "battle_1": "bgm/battle_mode1.wav",
+        "battle_2": "bgm/battle_mode2.wav",
+        "battle_3": "bgm/battle_mode3.wav",
+        "settlement_normal_win": "bgm/settlement_normal_win.wav",
+        "settlement_normal_lose": "bgm/settlement_normal_lose.wav",
+        "survival_win": "bgm/survival_win.wav",
+        "survival_lose": "bgm/survival_lose.wav",
+    }
+
+    # SFX类型映射表
+    SFX_MAP = {
+        "rock": "sfx/rock.wav",
+        "scissors": "sfx/scissors.wav",
+        "paper": "sfx/paper.wav",
+        "win": "sfx/win.wav",
+        "lose": "sfx/lose.wav",
+        "draw": "sfx/draw.wav",
+    }
+
+    # Ducking参数
+    DUCK_VOLUME = 0.2       # Ducking时BGM音量（原音量的20%）
+    NORMAL_VOLUME = 0.7     # 正常BGM音量（70%）
+    SFX_VOLUME = 1.0        # SFX音量（100%）
+
+    def __new__(cls):
+        """单例模式：确保全局只有一个AudioManager实例"""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        """初始化音频管理器"""
+        if self._initialized:
+            return
+        super().__init__()
+        self._initialized = True
+        self._current_bgm_key: Optional[str] = None
+        self._is_ducking = False
+        self._sounds_dir: Optional[Path] = None
+        self._bgm_player: Optional[QMediaPlayer] = None
+        self._bgm_output: Optional[QAudioOutput] = None
+        self._sfx_cache: dict[str, QSoundEffect] = {}
+        self._init_players()
+
+    def _init_players(self):
+        """初始化BGM播放器和SFX缓存"""
+        # BGM播放器
+        self._bgm_player = QMediaPlayer()
+        self._bgm_output = QAudioOutput()
+        self._bgm_player.setAudioOutput(self._bgm_output)
+        self._bgm_output.setVolume(self.NORMAL_VOLUME)
+
+        # BGM循环播放
+        self._bgm_player.mediaStatusChanged.connect(self._on_bgm_status_changed)
+
+        # 预加载SFX
+        self._preload_sfx()
+
+    def _on_bgm_status_changed(self, status):
+        """BGM播放状态变化回调，实现自动循环"""
+        if status == QMediaPlayer.MediaStatus.EndOfMedia:
+            self._bgm_player.setPosition(0)
+            self._bgm_player.play()
+
+    def _preload_sfx(self):
+        """预加载所有SFX到缓存"""
+        if not self._sounds_dir:
+            return
+        for sfx_key, sfx_path in self.SFX_MAP.items():
+            full_path = self._sounds_dir / sfx_path
+            if full_path.exists():
+                effect = QSoundEffect()
+                effect.setSource(QUrl.fromLocalFile(str(full_path)))
+                effect.setVolume(self.SFX_VOLUME)
+                self._sfx_cache[sfx_key] = effect
+
+    def set_sounds_dir(self, sounds_dir: str):
+        """设置音频资源根目录"""
+        self._sounds_dir = Path(sounds_dir)
+        self._preload_sfx()
+
+    def play_bgm(self, scene: str, mode: int = None, result: str = None) -> None:
+        """
+        播放背景音乐
+        参数:
+            scene: 场景标识（login/mode_select/battle/settlement）
+            mode: 对战模式（1/2/3），仅battle场景使用
+            result: 结算结果（win/lose），仅settlement场景使用
+        """
+        bgm_key = self._resolve_bgm_key(scene, mode, result)
+        if bgm_key is None:
+            return
+        if bgm_key == self._current_bgm_key:
+            return  # 同一首BGM，不重复播放
+        self._play_bgm_by_key(bgm_key)
+
+    def stop_bgm(self) -> None:
+        """停止当前背景音乐"""
+        if self._bgm_player:
+            self._bgm_player.stop()
+        self._current_bgm_key = None
+
+    def switch_bgm(self, scene: str, mode: int = None, result: str = None) -> None:
+        """
+        无缝切换背景音乐
+        停止当前音乐并播放目标场景音乐
+        """
+        self.stop_bgm()
+        self.play_bgm(scene, mode, result)
+
+    def play_sfx(self, sfx_type: str) -> None:
+        """
+        播放音效
+        参数:
+            sfx_type: 音效类型（rock/scissors/paper/win/lose/draw）
+        """
+        effect = self._sfx_cache.get(sfx_type)
+        if effect:
+            effect.play()
+
+    def duck_bgm(self) -> None:
+        """压低背景音乐音量（Ducking机制）
+        出拳时调用，确保音效清晰可闻
+        """
+        if not self._is_ducking and self._bgm_output:
+            self._bgm_output.setVolume(self.DUCK_VOLUME)
+            self._is_ducking = True
+
+    def restore_bgm(self) -> None:
+        """恢复背景音乐音量
+        音效播放完毕后调用
+        """
+        if self._is_ducking and self._bgm_output:
+            self._bgm_output.setVolume(self.NORMAL_VOLUME)
+            self._is_ducking = False
+
+    def stop_all(self) -> None:
+        """停止所有音乐和音效（应用退出时调用）"""
+        self.stop_bgm()
+        for effect in self._sfx_cache.values():
+            effect.stop()
+
+    def _resolve_bgm_key(self, scene: str, mode: int = None, result: str = None) -> Optional[str]:
+        """
+        根据场景参数解析BGM资源键
+        参数:
+            scene: 场景标识
+            mode: 对战模式
+            result: 结算结果
+        返回:
+            BGM_MAP中的键名，或None
+        """
+        if scene == "login":
+            return "login"
+        elif scene == "mode_select":
+            return "mode_select"
+        elif scene == "battle":
+            if mode in (1, 2, 3):
+                return f"battle_{mode}"
+        elif scene == "settlement":
+            if mode == 3:
+                return f"survival_{result}" if result in ("win", "lose") else None
+            else:
+                return f"settlement_normal_{result}" if result in ("win", "lose") else None
+        return None
+
+    def _play_bgm_by_key(self, bgm_key: str) -> None:
+        """
+        根据BGM键名播放音乐
+        参数:
+            bgm_key: BGM_MAP中的键名
+        """
+        if not self._sounds_dir:
+            return
+        bgm_path = self.BGM_MAP.get(bgm_key)
+        if bgm_path is None:
+            return
+        full_path = self._sounds_dir / bgm_path
+        if not full_path.exists():
+            return
+        source = QUrl.fromLocalFile(str(full_path))
+        self._bgm_player.setSource(source)
+        self._bgm_player.play()
+        self._current_bgm_key = bgm_key
+
+    @classmethod
+    def reset_instance(cls):
+        """重置单例实例（仅用于测试）"""
+        if cls._instance:
+            cls._instance.stop_all()
+        cls._instance = None
+```
+
+### 2.5 数据访问类
 
 ```python
 # src/data/database.py
@@ -765,21 +996,478 @@ def calculate_win_rate(win_count: int, total_battles: int) -> float:
        结束
 ```
 
+### 5.4 音频管理 - BGM场景切换流程
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    BGM场景切换状态机                           │
+│                                                              │
+│  ┌─────────┐  登录成功   ┌──────────────┐  开始对战  ┌───────┤
+│  │  login  │ ──────────> │ mode_select  │ ──────────>│battle │
+│  └─────────┘             └──────────────┘            │ _1/2/3│
+│       ▲                       ▲  ▲                   └───┬───┘
+│       │                       │  │                       │
+│       │ 退出登录              │  │ 返回主界面            │对战结束
+│       │                       │  │                       ▼
+│       │                       │  │              ┌────────────────┐
+│       │                       │  │              │   settlement   │
+│       │                       │  │              │ normal_win/lose│
+│       │                       │  │              │ survival_win   │
+│       │                       │  │              │ /survival_lose │
+│       │                       │  │              └───────┬────────┘
+│       │                       │  │                      │
+│       │                       │  │  返回主界面          │再来一局
+│       │                       │  └──────────────────────┤
+│       │                       │                         │
+│       └───────────────────────┘                         ▼
+│                                               重新进入battle
+└──────────────────────────────────────────────────────────────┘
+```
+
+**场景切换规则表:**
+
+| 当前场景 | 触发事件 | 目标场景 | BGM切换方式 |
+|----------|----------|----------|-------------|
+| login | 登录成功 | mode_select | switch_bgm("mode_select") |
+| login | 登录失败 | login | 不切换，继续循环 |
+| mode_select | 开始对战 | battle | switch_bgm("battle", mode=N) |
+| mode_select | 退出登录 | login | switch_bgm("login") |
+| mode_select | 查看战绩 | mode_select | 不切换，继续循环 |
+| battle | 对战结束 | settlement | switch_bgm("settlement", mode=N, result=R) |
+| battle | 返回主界面 | mode_select | switch_bgm("mode_select") |
+| battle | 出拳 | battle(ducking) | duck_bgm() → play_sfx() → restore_bgm() |
+| battle | 再来一局 | battle | switch_bgm("battle", mode=N) 从头播放 |
+| settlement | 再来一局 | battle | switch_bgm("battle", mode=N) |
+| settlement | 返回主界面 | mode_select | switch_bgm("mode_select") |
+| 任意 | 关闭应用 | - | stop_all() |
+
+### 5.5 音频管理 - Ducking机制流程
+
+```
+玩家点击出拳按钮
+       │
+       ▼
+┌──────────────────┐
+│ duck_bgm()       │  BGM音量: 70% → 20%
+│ 压低背景音乐音量  │
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│ play_sfx(type)   │  播放出拳音效(rock/scissors/paper)
+│ 播放出拳音效      │
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│ 判定胜负结果      │
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│ play_sfx(result) │  播放判定音效(win/lose/draw)
+│ 播放判定音效      │
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│ restore_bgm()    │  BGM音量: 20% → 70%
+│ 恢复背景音乐音量  │
+└────────┬─────────┘
+         │
+         ▼
+   准备下一回合
+```
+
+### 5.6 音频管理 - UI层集成调用时序
+
+```
+GameMainWindow          LoginWindow          AudioManager
+     │                      │                     │
+     │  创建LoginWindow     │                     │
+     │─────────────────────>│                     │
+     │                      │  play_bgm("login")  │
+     │                      │────────────────────>│
+     │                      │                     │──> 播放login.wav
+     │                      │                     │
+     │  登录成功            │                     │
+     │<─────────────────────│                     │
+     │                      │                     │
+     │  创建MainWindow      │                     │
+     │──────────────────────┼────────────────────>│
+     │                      │  switch_bgm         │
+     │                      │  ("mode_select")    │
+     │                      │                     │──> 停止login.wav
+     │                      │                     │──> 播放mode_select.wav
+     │                      │                     │
+     │  开始对战(mode=1)    │                     │
+     │──────────────────────┼────────────────────>│
+     │                      │  switch_bgm         │
+     │                      │  ("battle",1)       │
+     │                      │                     │──> 播放battle_mode1.wav
+
+BattleWindow            AudioManager
+     │                      │
+     │  玩家点击"石头"      │
+     │  duck_bgm()          │
+     │─────────────────────>│──> BGM音量 70%→20%
+     │  play_sfx("rock")    │
+     │─────────────────────>│──> 播放rock.wav
+     │  判定结果为"胜利"    │
+     │  play_sfx("win")     │
+     │─────────────────────>│──> 播放win.wav
+     │  restore_bgm()       │
+     │─────────────────────>│──> BGM音量 20%→70%
+     │                      │
+     │  对战结束(mode=1,win)│
+     │  switch_bgm          │
+     │  ("settlement",1,"win")│
+     │─────────────────────>│──> 播放settlement_normal_win.wav
+```
+
 ---
 
-## 6. 评审签字
+## 6. 音频管理模块详细设计
+
+### 6.1 模块内部结构
+
+```
+src/audio/
+├── __init__.py              # 模块初始化，导出AudioManager
+└── audio_manager.py         # 音频管理器实现
+```
+
+### 6.2 数据结构设计
+
+#### 6.2.1 BGM场景映射表
+
+```python
+BGM_MAP = {
+    "login":                    "bgm/login.wav",                # 登录界面
+    "mode_select":              "bgm/mode_select.wav",          # 模式选择界面
+    "battle_1":                 "bgm/battle_mode1.wav",         # 一局定胜负
+    "battle_2":                 "bgm/battle_mode2.wav",         # 三局两胜
+    "battle_3":                 "bgm/battle_mode3.wav",         # 连战模式
+    "settlement_normal_win":    "bgm/settlement_normal_win.wav", # 普通胜利结算
+    "settlement_normal_lose":   "bgm/settlement_normal_lose.wav",# 普通失败结算
+    "survival_win":             "bgm/survival_win.wav",          # 连战胜利结算
+    "survival_lose":            "bgm/survival_lose.wav",         # 连战失败结算
+}
+```
+
+#### 6.2.2 SFX类型映射表
+
+```python
+SFX_MAP = {
+    "rock":     "sfx/rock.wav",      # 石头出拳
+    "scissors": "sfx/scissors.wav",   # 剪刀出拳
+    "paper":    "sfx/paper.wav",      # 布出拳
+    "win":      "sfx/win.wav",        # 胜利判定
+    "lose":     "sfx/lose.wav",       # 失败判定
+    "draw":     "sfx/draw.wav",       # 平局判定
+}
+```
+
+#### 6.2.3 音频参数配置
+
+```python
+# Ducking参数
+DUCK_VOLUME = 0.2       # Ducking时BGM音量（原音量的20%）
+NORMAL_VOLUME = 0.7     # 正常BGM音量（70%）
+SFX_VOLUME = 1.0        # SFX音量（100%）
+```
+
+#### 6.2.4 内部状态变量
+
+| 变量名 | 类型 | 说明 |
+|--------|------|------|
+| _current_bgm_key | Optional[str] | 当前播放的BGM键名，防止重复播放同一首 |
+| _is_ducking | bool | 是否处于Ducking状态 |
+| _sounds_dir | Optional[Path] | 音频资源根目录路径 |
+| _bgm_player | QMediaPlayer | BGM播放器实例 |
+| _bgm_output | QAudioOutput | BGM音频输出实例 |
+| _sfx_cache | dict[str, QSoundEffect] | SFX预加载缓存 |
+
+### 6.3 接口详细定义
+
+#### 6.3.1 公共接口
+
+| 方法签名 | 说明 | 调用方 |
+|----------|------|--------|
+| `set_sounds_dir(sounds_dir: str) -> None` | 设置音频资源根目录 | GameMainWindow |
+| `play_bgm(scene: str, mode: int = None, result: str = None) -> None` | 播放背景音乐 | UI层各窗口 |
+| `stop_bgm() -> None` | 停止当前背景音乐 | AudioManager内部 |
+| `switch_bgm(scene: str, mode: int = None, result: str = None) -> None` | 无缝切换背景音乐 | UI层各窗口 |
+| `play_sfx(sfx_type: str) -> None` | 播放音效 | BattleWindow |
+| `duck_bgm() -> None` | 压低BGM音量 | BattleWindow |
+| `restore_bgm() -> None` | 恢复BGM音量 | BattleWindow |
+| `stop_all() -> None` | 停止所有音频 | GameMainWindow |
+
+#### 6.3.2 私有方法
+
+| 方法签名 | 说明 |
+|----------|------|
+| `_init_players() -> None` | 初始化BGM播放器和SFX缓存 |
+| `_on_bgm_status_changed(status) -> None` | BGM播放状态回调，实现循环播放 |
+| `_preload_sfx() -> None` | 预加载所有SFX到缓存 |
+| `_resolve_bgm_key(scene, mode, result) -> Optional[str]` | 根据场景参数解析BGM资源键 |
+| `_play_bgm_by_key(bgm_key: str) -> None` | 根据键名播放BGM |
+
+### 6.4 技术实现方案
+
+#### 6.4.1 BGM播放 - QMediaPlayer
+
+**选型理由:**
+- QMediaPlayer支持WAV/MP3/OGG等格式
+- 内置播放状态管理（Playing/Paused/Stopped）
+- 支持音量控制（QAudioOutput），便于实现Ducking
+- 支持mediaStatusChanged信号，便于实现循环播放
+
+**循环播放实现:**
+```python
+# 监听播放状态，播放结束后自动重头播放
+self._bgm_player.mediaStatusChanged.connect(self._on_bgm_status_changed)
+
+def _on_bgm_status_changed(self, status):
+    if status == QMediaPlayer.MediaStatus.EndOfMedia:
+        self._bgm_player.setPosition(0)
+        self._bgm_player.play()
+```
+
+**音量控制实现:**
+```python
+# 通过QAudioOutput控制音量
+self._bgm_output = QAudioOutput()
+self._bgm_player.setAudioOutput(self._bgm_output)
+self._bgm_output.setVolume(0.7)  # 0.0 ~ 1.0
+```
+
+#### 6.4.2 SFX播放 - QSoundEffect
+
+**选型理由:**
+- QSoundEffect专为低延迟音效设计
+- 支持WAV格式，播放延迟极低（<50ms）
+- 支持同时播放多个音效（与BGM互不干扰）
+- 支持预加载，首次播放无延迟
+
+**预加载实现:**
+```python
+# 在初始化时预加载所有SFX到缓存
+def _preload_sfx(self):
+    for sfx_key, sfx_path in self.SFX_MAP.items():
+        full_path = self._sounds_dir / sfx_path
+        if full_path.exists():
+            effect = QSoundEffect()
+            effect.setSource(QUrl.fromLocalFile(str(full_path)))
+            effect.setVolume(1.0)
+            self._sfx_cache[sfx_key] = effect
+```
+
+#### 6.4.3 Ducking机制实现
+
+**原理:** 出拳时将BGM音量从0.7压低至0.2，确保SFX清晰可闻；音效播放完毕后恢复至0.7。
+
+```python
+def duck_bgm(self):
+    """出拳时调用"""
+    if not self._is_ducking and self._bgm_output:
+        self._bgm_output.setVolume(self.DUCK_VOLUME)  # 0.2
+        self._is_ducking = True
+
+def restore_bgm(self):
+    """音效播放完毕后调用"""
+    if self._is_ducking and self._bgm_output:
+        self._bgm_output.setVolume(self.NORMAL_VOLUME)  # 0.7
+        self._is_ducking = False
+```
+
+**Ducking时序:**
+1. 玩家点击出拳 → `duck_bgm()` → BGM音量降至20%
+2. `play_sfx("rock")` → 播放出拳音效
+3. 判定结果 → `play_sfx("win")` → 播放判定音效
+4. `restore_bgm()` → BGM音量恢复至70%
+
+#### 6.4.4 单例模式实现
+
+**理由:** 全局只需一个音频管理器，避免多个BGM播放器同时播放造成混乱。
+
+```python
+_instance = None
+
+def __new__(cls):
+    if cls._instance is None:
+        cls._instance = super().__new__(cls)
+        cls._instance._initialized = False
+    return cls._instance
+
+def __init__(self):
+    if self._initialized:
+        return
+    # ... 初始化逻辑
+    self._initialized = True
+```
+
+### 6.5 UI层集成方案
+
+#### 6.5.1 GameMainWindow集成
+
+```python
+# src/main.py 修改点
+from src.audio.audio_manager import AudioManager
+from src.config.settings import Settings
+
+class GameMainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        # 初始化AudioManager
+        self.audio_manager = AudioManager()
+        self.audio_manager.set_sounds_dir(str(Settings.ASSETS_DIR / "sounds"))
+        # ... 其余初始化
+
+    def closeEvent(self, event):
+        """应用关闭时停止所有音频"""
+        self.audio_manager.stop_all()
+        event.accept()
+```
+
+#### 6.5.2 LoginWindow集成
+
+```python
+# src/ui/login_window.py 修改点
+from ..audio.audio_manager import AudioManager
+
+class LoginWindow(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.audio_manager = AudioManager()
+        # 登录界面显示时播放BGM
+        self.audio_manager.play_bgm("login")
+        # ... 其余初始化
+
+    def _on_login_clicked(self):
+        # 登录成功后切换BGM
+        if success:
+            self.audio_manager.switch_bgm("mode_select")
+            self.login_success.emit(user.id, user.username)
+```
+
+#### 6.5.3 MainWindow集成
+
+```python
+# src/ui/main_window.py 修改点
+from ..audio.audio_manager import AudioManager
+
+class MainWindow(QWidget):
+    def __init__(self, user_id, username):
+        super().__init__()
+        self.audio_manager = AudioManager()
+        # 进入主界面时确保播放mode_select BGM
+        self.audio_manager.play_bgm("mode_select")
+        # ... 其余初始化
+
+    def _on_logout_clicked(self):
+        # 退出登录切换回login BGM
+        self.audio_manager.switch_bgm("login")
+        self.logout_requested.emit()
+
+    def _on_history_clicked(self):
+        # 查看战绩不切换BGM，继续播放mode_select
+        pass
+```
+
+#### 6.5.4 BattleWindow集成
+
+```python
+# src/ui/battle_window.py 修改点
+from ..audio.audio_manager import AudioManager
+
+class BattleWindow(QWidget):
+    def __init__(self, game_engine, score_manager, user_id, mode):
+        super().__init__()
+        self.audio_manager = AudioManager()
+        self.mode = mode
+        # 进入对战界面切换BGM
+        self.audio_manager.switch_bgm("battle", mode=mode)
+        # ... 其余初始化
+
+    def _on_choice_selected(self, choice: Choice):
+        # Ducking机制：出拳时压低BGM
+        self.audio_manager.duck_bgm()
+
+        # 播放出拳音效
+        sfx_map = {
+            Choice.ROCK: "rock",
+            Choice.SCISSORS: "scissors",
+            Choice.PAPER: "paper"
+        }
+        self.audio_manager.play_sfx(sfx_map[choice])
+
+        # ... 处理对战逻辑
+
+        # 播放判定音效
+        result_sfx_map = {
+            Result.WIN: "win",
+            Result.LOSE: "lose",
+            Result.DRAW: "draw"
+        }
+        self.audio_manager.play_sfx(result_sfx_map[result])
+
+        # 恢复BGM音量
+        self.audio_manager.restore_bgm()
+
+    def _finish_game(self):
+        # 对战结束，切换到结算BGM
+        final_result = self.game_engine.get_final_result()
+        result_str = "win" if final_result == Result.WIN else "lose"
+        self.audio_manager.switch_bgm("settlement", mode=self.mode, result=result_str)
+
+    def _on_continue_clicked(self):
+        # 再来一局，重新播放对战BGM
+        self.audio_manager.switch_bgm("battle", mode=self.mode)
+
+    def _on_finish_clicked(self):
+        # 返回主界面，切换到mode_select BGM
+        self.audio_manager.switch_bgm("mode_select")
+```
+
+### 6.6 异常处理设计
+
+| 异常场景 | 处理策略 | 说明 |
+|----------|----------|------|
+| 音频文件不存在 | 静默跳过，不播放 | `_play_bgm_by_key`和`_preload_sfx`中检查文件存在性 |
+| BGM播放失败 | 静默跳过，不影响游戏流程 | QMediaPlayer内部错误不抛出异常 |
+| SFX播放失败 | 静默跳过，不影响游戏流程 | QSoundEffect播放失败不抛出异常 |
+| sounds_dir未设置 | 所有播放操作静默返回 | `set_sounds_dir`未调用时不播放 |
+| 应用异常关闭 | closeEvent中调用stop_all | 确保音频资源释放 |
+
+### 6.7 配置项设计
+
+在 `src/config/settings.py` 中新增音频相关配置：
+
+```python
+# 音频配置
+SOUNDS_DIR = ASSETS_DIR / "sounds"
+BGM_VOLUME = 0.7           # 默认BGM音量
+SFX_VOLUME = 1.0           # 默认SFX音量
+DUCK_VOLUME = 0.2          # Ducking时BGM音量
+```
+
+---
+
+## 7. 评审签字
 
 | 角色 | 姓名 | 日期 | 签字 |
 |------|------|------|------|
 | 项目负责人 |  |  |  |
 | Planner架构师 | Planner | 2026-06-01 | ✓ |
-| Coder开发工程师 |  |  |  |
+| Coder开发工程师 | Coder | 2026-06-03 | ✓ |
 | Tester测试工程师 |  |  |  |
 | Reviewer代码审查 |  |  |  |
 
 ---
 
-**文档状态**: ✅ 已审批为基线版本
+**文档状态**: 待审核
+**当前版本号**: v1.2.0
 **基线版本号**: v1.0.0
 **基线创建日期**: 2026-06-01
 **基线保存位置**: docs/dd/DETAILED_DESIGN_v1.0.0.md

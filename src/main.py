@@ -3,11 +3,16 @@
 """
 
 import sys
+import logging
 from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox, QWidget
 from PyQt6.QtCore import Qt
 
+from src.audio.audio_manager import get_audio_manager
+from src.config.settings import Settings
 from src.ui.login_window import LoginWindow
 from src.ui.main_window import MainWindow
+
+logger = logging.getLogger(__name__)
 
 
 class GameMainWindow(QMainWindow):
@@ -21,6 +26,11 @@ class GameMainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("猜拳小游戏")
         self.setWindowFlags(Qt.WindowType.WindowCloseButtonHint | Qt.WindowType.WindowMinimizeButtonHint)
+
+        # 初始化AudioManager
+        self.audio_manager = get_audio_manager()
+        self.audio_manager.set_sounds_dir(str(Settings.SOUNDS_DIR))
+        logger.info("AudioManager integrated into GameMainWindow")
 
         self.login_window = LoginWindow()
         self.login_window.login_success.connect(self._on_login_success)
@@ -80,6 +90,17 @@ class GameMainWindow(QMainWindow):
         self.login_window.login_success.connect(self._on_login_success)
         self.setCentralWidget(self.login_window)
         self._adjust_size(self.login_window)
+
+    def closeEvent(self, event):
+        """
+        应用关闭事件处理
+        停止所有音频播放，释放音频资源
+        参数:
+            event: 关闭事件
+        """
+        logger.info("Application closing, stopping all audio")
+        self.audio_manager.stop_all()
+        event.accept()
 
 
 def main():
